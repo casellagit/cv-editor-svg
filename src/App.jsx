@@ -49,6 +49,24 @@ const App = () => {
     if (selectedId === id) setSelectedId(null);
   };
 
+  const deleteAsset = (id) => {
+    setProject(prev => ({
+      ...prev,
+      assets: prev.assets.filter(a => a.id !== id),
+      elements: prev.elements.filter(el => el.assetId !== id)
+    }));
+  };
+
+  const removeBackground = (e) => {
+    e.stopPropagation();
+    setProject(prev => ({
+      ...prev,
+      background: null,
+      canvasWidth: DEFAULT_CANVAS_WIDTH,
+      canvasHeight: DEFAULT_CANVAS_HEIGHT
+    }));
+  };
+
   const updateZIndex = (id, action) => {
     setProject(prev => {
       const elements = [...prev.elements].sort((a, b) => a.zIndex - b.zIndex);
@@ -187,28 +205,36 @@ const App = () => {
   };
 
   const handleElementStartDrag = (e, el) => {
-    e.stopPropagation();
-    setSelectedId(el.id);
-    setIsDragging(true);
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    
+    setSelectedId(el.id);
+    setIsDragging(true);
+    
     const rect = canvasRef.current.getBoundingClientRect();
     const xOnCanvas = (clientX - rect.left) / zoom;
     const yOnCanvas = (clientY - rect.top) / zoom;
     setDragOffset({ x: xOnCanvas - el.x, y: yOnCanvas - el.y });
   };
 
-  const handleMouseMove = (e) => {
+  const handleInteractionMove = (e) => {
     if (!isDragging || !selectedId) return;
+    
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    
     const rect = canvasRef.current.getBoundingClientRect();
     const xOnCanvas = (clientX - rect.left) / zoom;
     const yOnCanvas = (clientY - rect.top) / zoom;
+    
     updateElement(selectedId, {
       x: Math.round(xOnCanvas - dragOffset.x),
       y: Math.round(yOnCanvas - dragOffset.y)
     });
+  };
+
+  const handleEndDrag = () => {
+    setIsDragging(false);
   };
 
   const exportProjectJSON = () => {
@@ -282,28 +308,33 @@ const App = () => {
 
   const exportSVG = async () => {
     const sorted = [...project.elements].sort((a, b) => a.zIndex - b.zIndex);
-    let svgContent = `<svg width="${project.canvasWidth}" height="${project.canvasHeight}" viewBox="0 0 ${project.canvasWidth} ${project.canvasHeight}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">`;
+    let svgContent = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n<svg width="${project.canvasWidth}" height="${project.canvasHeight}" viewBox="0 0 ${project.canvasWidth} ${project.canvasHeight}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">`;
     
+    // Background
     if (project.background) {
-      svgContent += `<image href="${project.background.src}" width="100%" height="100%" preserveAspectRatio="xMidYMid slice" />`;
+      svgContent += `\n<image href="${project.background.src}" x="0" y="0" width="${project.canvasWidth}" height="${project.canvasHeight}" preserveAspectRatio="none" />`;
     } else {
-      svgContent += `<rect width="100%" height="100%" fill="#111" />`;
+      svgContent += `\n<rect width="100%" height="100%" fill="#111" />`;
     }
 
     for (const el of sorted) {
-      const transform = `translate(${el.x}, ${el.y}) rotate(${el.rotation})`;
-      
       if (el.type === 'text') {
-        const scaledFontSize = el.fontSize * el.scale;
-        svgContent += `<text transform="${transform}" font-family="${el.fontFamily}" font-size="${scaledFontSize}" fill="${el.color}" font-weight="${el.fontWeight}" text-anchor="middle" dominant-baseline="central" stroke="${el.strokeColor}" stroke-width="${el.strokeWidth}">${el.content}</text>`;
+        // Fix per il testo: Usiamo dy=".35em" che è molto più compatibile di dominant-baseline per il centro verticale
+        svgContent += `\n<g transform="translate(${el.x}, ${el.y}) rotate(${el.rotation}) scale(${el.scale})">`;
+        svgContent += `<text x="0" y="0" dy=".35em" font-family="${el.fontFamily}" font-size="${el.fontSize}" fill="${el.color}" font-weight="${el.fontWeight}" text-anchor="middle" stroke="${el.strokeColor}" stroke-width="${el.strokeWidth}">${el.content}</text>`;
+        svgContent += `</g>`;
       } else {
-        const scaledW = (el.width || 100) * el.scale;
-        const scaledH = (el.height || 100) * el.scale;
-        svgContent += `<image href="${el.src}" transform="${transform}" x="${-scaledW/2}" y="${-scaledH/2}" width="${scaledW}" height="${scaledH}" />`;
+        const w = el.width || 100;
+        const h = el.height || 100;
+        const offsetX = -w / 2;
+        const offsetY = -h / 2;
+        svgContent += `\n<g transform="translate(${el.x}, ${el.y}) rotate(${el.rotation}) scale(${el.scale}) translate(${offsetX}, ${offsetY})">`;
+        svgContent += `<image href="${el.src}" x="0" y="0" width="${w}" height="${h}" />`;
+        svgContent += `</g>`;
       }
     }
 
-    svgContent += `</svg>`;
+    svgContent += `\n</svg>`;
     const blob = new Blob([svgContent], { type: 'image/svg+xml' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -324,9 +355,27 @@ const App = () => {
           
           <section className="mb-6">
             <h3 className="text-sm font-semibold text-gray-400 uppercase mb-3">Sfondo</h3>
-            <button onClick={() => fileInputRef.current.click()} className="w-full aspect-video border-2 border-dashed border-gray-700 rounded-lg flex flex-col items-center justify-center hover:border-blue-500 transition-colors bg-black/20 overflow-hidden">
-              {project.background ? <img src={project.background.src} className="h-full w-full object-contain" alt="bg" /> : <ImageIcon className="w-8 h-8 text-gray-600" />}
-            </button>
+            <div className="relative group">
+              <button 
+                onClick={() => !project.background && fileInputRef.current.click()} 
+                className={`w-full aspect-video border-2 border-dashed border-gray-700 rounded-lg flex flex-col items-center justify-center transition-colors bg-black/20 overflow-hidden ${!project.background ? 'hover:border-blue-500' : ''}`}
+              >
+                {project.background ? (
+                  <img src={project.background.src} className="h-full w-full object-contain" alt="bg" />
+                ) : (
+                  <ImageIcon className="w-8 h-8 text-gray-600" />
+                )}
+              </button>
+              {project.background && (
+                <button 
+                  onClick={removeBackground}
+                  className="absolute top-2 right-2 p-1 bg-red-600 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
+                  title="Rimuovi sfondo"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
             <input type="file" ref={fileInputRef} hidden accept="image/*" onChange={handleBackgroundUpload} />
           </section>
 
@@ -337,8 +386,20 @@ const App = () => {
             </div>
             <div className="grid grid-cols-4 gap-2">
               {project.assets.filter(a => a.type === 'icon').map(asset => (
-                <div key={asset.id} className="relative aspect-square bg-black/40 rounded border border-gray-700 p-1 hover:border-blue-500 cursor-pointer" onClick={() => addIcon(asset)}>
-                  <img src={asset.src} className="w-full h-full object-contain" alt="icon" />
+                <div key={asset.id} className="relative group aspect-square bg-black/40 rounded border border-gray-700 p-1 hover:border-blue-500 cursor-pointer">
+                  <img 
+                    src={asset.src} 
+                    className="w-full h-full object-contain" 
+                    alt="icon" 
+                    onClick={() => addIcon(asset)}
+                  />
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); deleteAsset(asset.id); }}
+                    className="absolute -top-1 -right-1 p-0.5 bg-red-600 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                    title="Elimina asset"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
                 </div>
               ))}
             </div>
@@ -374,7 +435,6 @@ const App = () => {
         </div>
       </aside>
 
-      {/* Toggle Pannelli */}
       <div className="flex flex-col justify-center gap-4 z-50">
         <button onClick={() => setLeftPanelOpen(!leftPanelOpen)} className="h-12 w-6 bg-[#1a1a1a] border border-gray-800 border-l-0 rounded-r-lg hover:bg-gray-700">
           {leftPanelOpen ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
@@ -382,7 +442,13 @@ const App = () => {
       </div>
 
       {/* AREA CENTRALE CANVAS */}
-      <main className="flex-1 relative overflow-hidden bg-black/60 flex items-center justify-center p-4" onMouseMove={handleMouseMove} onMouseUp={() => setIsDragging(false)}>
+      <main 
+        className="flex-1 relative overflow-hidden bg-black/60 flex items-center justify-center p-4" 
+        onMouseMove={handleInteractionMove} 
+        onMouseUp={handleEndDrag}
+        onTouchMove={handleInteractionMove}
+        onTouchEnd={handleEndDrag}
+      >
         <div className="absolute top-6 right-6 flex gap-2 z-50">
             <div className="bg-[#1a1a1a] p-1 rounded-lg border border-gray-800 flex shadow-xl">
                 <button onClick={exportPNG} className="px-4 py-2 hover:bg-gray-800 rounded flex items-center gap-2 text-xs font-bold text-blue-400">
@@ -420,7 +486,8 @@ const App = () => {
               <div
                 key={el.id}
                 onMouseDown={(e) => handleElementStartDrag(e, el)}
-                className={`absolute flex items-center justify-center pointer-events-auto cursor-move ${selectedId === el.id ? 'ring-2 ring-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.5)]' : ''}`}
+                onTouchStart={(e) => handleElementStartDrag(e, el)}
+                className={`absolute flex items-center justify-center pointer-events-auto cursor-move touch-none ${selectedId === el.id ? 'ring-2 ring-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.5)]' : ''}`}
                 style={{
                   left: el.x,
                   top: el.y,
@@ -472,12 +539,12 @@ const App = () => {
                      <div className="flex items-center gap-1 bg-black/40 px-1 rounded border border-gray-700">
                         <input 
                           type="number" 
-                          step="0.01"
-                          value={Math.round(selectedElement.scale * 100) / 100} 
-                          onChange={(e) => updateElement(selectedId, { scale: parseFloat(e.target.value) || 0.01 })}
+                          step="1"
+                          value={Math.round(selectedElement.scale * 100)} 
+                          onChange={(e) => updateElement(selectedId, { scale: (parseFloat(e.target.value) / 100) || 0.01 })}
                           className="w-12 bg-transparent text-right text-xs outline-none py-0.5"
                         />
-                        <span className="text-[8px] text-gray-600">x</span>
+                        <span className="text-[8px] text-gray-600">%</span>
                      </div>
                    </div>
                    <input type="range" min="0.01" max="5" step="0.01" value={selectedElement.scale} onChange={(e) => updateElement(selectedId, { scale: parseFloat(e.target.value) })} className="w-full accent-blue-500" />
