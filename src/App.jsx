@@ -1,491 +1,591 @@
-﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
-Upload, Trash2, Layers, Plus, X, 
-Image as ImgIcon, Type as TxtIcon, ChevronDown, 
-FolderOpen, Maximize2, ChevronLeft, ChevronRight,
-Download, FontCursor, ArrowUp, ArrowDown, ChevronUp
+  Plus, Image as ImageIcon, Type, X, 
+  ChevronLeft, ChevronRight, Layers, Trash2, Move, 
+  Maximize, Minimize, DownloadCloud, FileJson, Save, Upload,
+  ArrowUp, ArrowDown, ChevronUp, ChevronDown
 } from 'lucide-react';
 
+const DEFAULT_CANVAS_WIDTH = 1920;
+const DEFAULT_CANVAS_HEIGHT = 1080;
+
 const App = () => {
-const [elements, setElements] = useState([]);
-const [maskData, setMaskData] = useState(null);
-const [maskOpacity, setMaskOpacity] = useState(0.5);
-const [selectedId, setSelectedId] = useState(null);
-const [isDragging, setIsDragging] = useState(false);
-const [assetLibrary, setAssetLibrary] = useState([]);
-const [customFonts, setCustomFonts] = useState([]);
-const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: 800, h: 450 });
-const [isExportOpen, setIsExportOpen] = useState(false);
-const [isFullscreen, setIsFullscreen] = useState(false);
-const [leftSidebarOpen, setLeftSidebarOpen] = useState(true);
-const [rightSidebarOpen, setRightSidebarOpen] = useState(true);
+  const [project, setProject] = useState({
+    name: "Nuovo Progetto",
+    background: null,
+    assets: [],
+    elements: [],
+    canvasWidth: DEFAULT_CANVAS_WIDTH,
+    canvasHeight: DEFAULT_CANVAS_HEIGHT
+  });
 
-const svgRef = useRef(null);
-const dragInfo = useRef({ active: false, id: null, offset: { x: 0, y: 0 } });
+  const [selectedId, setSelectedId] = useState(null);
+  const [leftPanelOpen, setLeftPanelOpen] = useState(true);
+  const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [zoom, setZoom] = useState(0.4);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
-useEffect(() => {
-customFonts.forEach(async (font) => {
-if (!document.fonts.check(`12px "${font.name}"`) && font.data) {
-try {
-const fontFace = new FontFace(font.name, `url(${font.data})`);
-const loadedFace = await fontFace.load();
-document.fonts.add(loadedFace);
-} catch (err) {
-console.error(`Errore caricamento font ${font.name}:`, err);
-}
-}
-});
-}, [customFonts]);
+  const canvasRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const iconInputRef = useRef(null);
+  const fontInputRef = useRef(null);
+  const jsonInputRef = useRef(null);
 
-useEffect(() => {
-const handleKeyDown = (e) => {
-if (e.key === 'Escape' && isFullscreen) setIsFullscreen(false);
-if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
-setElements(prev => prev.filter(el => el.id !== selectedId));
-setSelectedId(null);
-}
-};
-window.addEventListener('keydown', handleKeyDown);
-return () => window.removeEventListener('keydown', handleKeyDown);
-}, [isFullscreen, selectedId]);
+  const generateId = () => Math.random().toString(36).substr(2, 9);
 
-const fileToBase64 = (file) => new Promise((resolve, reject) => {
-const reader = new FileReader();
-reader.readAsDataURL(file);
-reader.onload = () => resolve(reader.result);
-reader.onerror = error => reject(error);
-});
+  const updateElement = (id, updates) => {
+    setProject(prev => ({
+      ...prev,
+      elements: prev.elements.map(el => el.id === id ? { ...el, ...updates } : el)
+    }));
+  };
 
-const handleFontUpload = async (e) => {
-const files = Array.from(e.target.files);
-for (const file of files) {
-const fontName = file.name.split('.')[0].replace(/[^a-zA-Z0-9]/g, '_');
-try {
-const base64Data = await fileToBase64(file);
-const fontFace = new FontFace(fontName, `url(${base64Data})`);
-const loadedFace = await fontFace.load();
-document.fonts.add(loadedFace);
-setCustomFonts(prev => [...prev, { name: fontName, file: file.name, data: base64Data }]);
-} catch (err) {
-console.error("Errore caricamento font:", err);
-}
-}
-};
+  const deleteElement = (id) => {
+    setProject(prev => ({
+      ...prev,
+      elements: prev.elements.filter(el => el.id !== id)
+    }));
+    if (selectedId === id) setSelectedId(null);
+  };
 
-const getSvgMetadata = (svgString) => {
-const parser = new DOMParser();
-const doc = parser.parseFromString(svgString, "image/svg+xml");
-const svgEl = doc.querySelector('svg');
-if (!svgEl) return { viewBox: "0 0 100 100", width: 100, height: 100, content: "" };
-const vb = svgEl.getAttribute('viewBox');
-const w = parseFloat(svgEl.getAttribute('width')) || 100;
-const h = parseFloat(svgEl.getAttribute('height')) || 100;
-// Rimuoviamo gli stili che potrebbero forzare colori dall'esterno se presenti nel root
-return { viewBox: vb || `0 0 ${w} ${h}`, width: w, height: h, content: svgEl.innerHTML };
-};
+  const updateZIndex = (id, action) => {
+    setProject(prev => {
+      const elements = [...prev.elements].sort((a, b) => a.zIndex - b.zIndex);
+      const index = elements.findIndex(el => el.id === id);
+      if (index === -1) return prev;
 
-const sanitizeSvgForPreview = (svgContent) => {
-return svgContent.replace(/<svg([^>]*)>/, (match, attrs) => {
-const cleaned = attrs.replace(/width="[^"]*"/gi, '').replace(/height="[^"]*"/gi, '');
-return `<svg${cleaned} style="max-width:100%; max-height:100%; width:auto; height:auto;">`;
-});
-};
+      const newElements = [...elements];
+      
+      switch(action) {
+        case 'front':
+          const [elFront] = newElements.splice(index, 1);
+          newElements.push(elFront);
+          break;
+        case 'back':
+          const [elBack] = newElements.splice(index, 1);
+          newElements.unshift(elBack);
+          break;
+        case 'up':
+          if (index < newElements.length - 1) {
+            [newElements[index], newElements[index + 1]] = [newElements[index + 1], newElements[index]];
+          }
+          break;
+        case 'down':
+          if (index > 0) {
+            [newElements[index], newElements[index - 1]] = [newElements[index - 1], newElements[index]];
+          }
+          break;
+        default: break;
+      }
 
-const saveProject = () => {
-const project = { 
-elements, maskData, viewBox, assetLibrary, customFonts, maskOpacity,
-timestamp: Date.now(), version: '1.8' 
-};
-const blob = new Blob([JSON.stringify(project)], { type: 'application/json' });
-const url = URL.createObjectURL(blob);
-const link = document.createElement('a');
-link.href = url; link.download = `project_${Date.now()}.json`; link.click();
-URL.revokeObjectURL(url);
-};
+      return {
+        ...prev,
+        elements: newElements.map((el, i) => ({ ...el, zIndex: i }))
+      };
+    });
+  };
 
-const loadProject = (e) => {
-const file = e.target.files[0];
-if (!file) return;
-const reader = new FileReader();
-reader.onload = (e) => {
-try {
-const project = JSON.parse(e.target.result);
-if (project.elements) setElements(project.elements);
-if (project.maskData !== undefined) setMaskData(project.maskData);
-if (project.viewBox) setViewBox(project.viewBox);
-if (project.assetLibrary) setAssetLibrary(project.assetLibrary);
-if (project.customFonts) setCustomFonts(project.customFonts);
-if (project.maskOpacity !== undefined) setMaskOpacity(project.maskOpacity);
-setSelectedId(null);
-} catch (err) { console.error("Errore caricamento JSON:", err); }
-};
-reader.readAsText(file);
-e.target.value = null;
-};
+  const handleBackgroundUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const img = new Image();
+      img.onload = () => {
+        setProject(prev => ({
+          ...prev,
+          background: { src: event.target.result, width: img.width, height: img.height },
+          canvasWidth: img.width,
+          canvasHeight: img.height
+        }));
+      };
+      img.src = event.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
 
-const getEventPos = (e) => {
-if (!svgRef.current) return { x: 0, y: 0 };
-const svg = svgRef.current;
-const point = svg.createSVGPoint();
-if (e.touches && e.touches.length > 0) {
-point.x = e.touches[0].clientX; point.y = e.touches[0].clientY;
-} else {
-point.x = e.clientX; point.y = e.clientY;
-}
-const ctm = svg.getScreenCTM().inverse();
-return point.matrixTransform(ctm);
-};
+  const handleIconUpload = (e) => {
+    const files = Array.from(e.target.files);
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+            setProject(prev => ({
+              ...prev,
+              assets: [...prev.assets, { 
+                id: generateId(), 
+                name: file.name, 
+                src: event.target.result, 
+                type: 'icon',
+                width: img.width,
+                height: img.height
+              }]
+            }));
+        };
+        img.src = event.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
 
-const startDrag = (e, id) => {
-e.stopPropagation();
-if (isFullscreen) return;
-const pos = getEventPos(e);
-const el = elements.find(item => item.id === id);
-if (!el) return;
-dragInfo.current = { active: true, id, offset: { x: pos.x - el.x, y: pos.y - el.y } };
-setIsDragging(true);
-setSelectedId(id);
-};
+  const handleFontUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fontName = `CustomFont_${generateId()}`;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const newStyle = document.createElement('style');
+      newStyle.appendChild(document.createTextNode(`@font-face { font-family: '${fontName}'; src: url('${event.target.result}'); }`));
+      document.head.appendChild(newStyle);
+      setProject(prev => ({
+        ...prev,
+        assets: [...prev.assets, { id: generateId(), name: file.name, family: fontName, type: 'font' }]
+      }));
+    };
+    reader.readAsDataURL(file);
+  };
 
-const handleDrag = useCallback((e) => {
-if (!dragInfo.current.active) return;
-const pos = getEventPos(e);
-setElements(prev => prev.map(el => 
-el.id === dragInfo.current.id 
-? { ...el, x: Math.round(pos.x - dragInfo.current.offset.x), y: Math.round(pos.y - dragInfo.current.offset.y) } 
-: el
-));
-}, []);
+  const addText = () => {
+    const newEl = {
+      id: generateId(),
+      type: 'text',
+      content: 'Nuovo Testo',
+      x: project.canvasWidth / 2,
+      y: project.canvasHeight / 2,
+      scale: 1,
+      rotation: 0,
+      zIndex: project.elements.length,
+      fontSize: 48,
+      color: '#ffffff',
+      fontFamily: 'sans-serif',
+      fontWeight: 'normal',
+      strokeWidth: 0,
+      strokeColor: '#000000'
+    };
+    setProject(prev => ({ ...prev, elements: [...prev.elements, newEl] }));
+    setSelectedId(newEl.id);
+  };
 
-const stopDrag = () => {
-dragInfo.current.active = false;
-setIsDragging(false);
-};
+  const addIcon = (asset) => {
+    const newEl = {
+      id: generateId(),
+      type: 'icon',
+      assetId: asset.id,
+      src: asset.src,
+      width: asset.width,
+      height: asset.height,
+      x: project.canvasWidth / 2,
+      y: project.canvasHeight / 2,
+      scale: 1,
+      rotation: 0,
+      zIndex: project.elements.length
+    };
+    setProject(prev => ({ ...prev, elements: [...prev.elements, newEl] }));
+    setSelectedId(newEl.id);
+  };
 
-const updateElement = (id, updates) => {
-setElements(prev => prev.map(el => el.id === id ? { ...el, ...updates } : el));
-};
+  const handleElementStartDrag = (e, el) => {
+    e.stopPropagation();
+    setSelectedId(el.id);
+    setIsDragging(true);
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const xOnCanvas = (clientX - rect.left) / zoom;
+    const yOnCanvas = (clientY - rect.top) / zoom;
+    setDragOffset({ x: xOnCanvas - el.x, y: yOnCanvas - el.y });
+  };
 
-const moveLayer = (id, direction) => {
-const index = elements.findIndex(el => el.id === id);
-if (index === -1) return;
-const newElements = [...elements];
-const el = newElements.splice(index, 1)[0];
-if (direction === 'top') newElements.push(el);
-else if (direction === 'bottom') newElements.unshift(el);
-else if (direction === 'up') newElements.splice(Math.min(index + 1, elements.length - 1), 0, el);
-else if (direction === 'down') newElements.splice(Math.max(index - 1, 0), 0, el);
-setElements(newElements);
-};
+  const handleMouseMove = (e) => {
+    if (!isDragging || !selectedId) return;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const xOnCanvas = (clientX - rect.left) / zoom;
+    const yOnCanvas = (clientY - rect.top) / zoom;
+    updateElement(selectedId, {
+      x: Math.round(xOnCanvas - dragOffset.x),
+      y: Math.round(yOnCanvas - dragOffset.y)
+    });
+  };
 
-const handleProportionalScale = (id, scaleValue) => {
-setElements(prev => prev.map(el => {
-if (el.id === id) {
-const ratio = el.originalRatio || (el.width / el.height);
-return { ...el, width: Math.round(scaleValue), height: Math.round(scaleValue / ratio) };
-}
-return el;
-}));
-};
+  const exportProjectJSON = () => {
+    const dataStr = JSON.stringify(project, null, 2);
+    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+    const linkElement = document.createElement('a');
+    linkElement.setAttribute('href', dataUri);
+    linkElement.setAttribute('download', `${project.name}.json`);
+    linkElement.click();
+  };
 
-const exportAs = async (format) => {
-const svg = svgRef.current;
-if (!svg) return;
-const clonedSvg = svg.cloneNode(true);
-clonedSvg.querySelectorAll('.selection-rect').forEach(r => r.remove());
-const serializer = new XMLSerializer();
-const svgString = serializer.serializeToString(clonedSvg);
-const svgBlob = new Blob([svgString], { type: "image/svg+xml;charset=utf-8" });
-const url = URL.createObjectURL(svgBlob);
-if (format === 'svg') {
-const link = document.createElement("a");
-link.href = url; link.download = `export_${Date.now()}.svg`; link.click();
-} else {
-const img = new Image();
-img.onload = () => {
-const canvas = document.createElement("canvas");
-canvas.width = viewBox.w; canvas.height = viewBox.h;
-const ctx = canvas.getContext("2d");
-ctx.drawImage(img, 0, 0);
-const link = document.createElement("a");
-link.href = canvas.toDataURL("image/png"); link.download = `export_${Date.now()}.png`; link.click();
-};
-img.src = url;
-}
-setIsExportOpen(false);
-};
+  const importProjectJSON = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const imported = JSON.parse(event.target.result);
+        setProject(imported);
+        setSelectedId(null);
+      } catch (err) {
+        console.error("Errore caricamento JSON", err);
+      }
+    };
+    reader.readAsText(file);
+  };
 
-const selectedElement = elements.find(el => el.id === selectedId);
+  const exportPNG = async () => {
+    const offCanvas = document.createElement('canvas');
+    offCanvas.width = project.canvasWidth;
+    offCanvas.height = project.canvasHeight;
+    const ctx = offCanvas.getContext('2d');
 
-return (
-<div className="flex h-screen bg-[#0a0c10] text-slate-100 overflow-hidden font-sans select-none">
-{!isFullscreen && (
-<aside className={`${leftSidebarOpen ? 'w-[300px]' : 'w-0'} bg-[#161b22] border-r border-slate-800 flex flex-col z-20 transition-all duration-300 relative`}>
-<button onClick={() => setLeftSidebarOpen(!leftSidebarOpen)} className="absolute top-1/2 -right-4 -translate-y-1/2 w-8 h-12 bg-[#161b22] border border-slate-800 border-l-0 rounded-r-lg flex items-center justify-center hover:bg-blue-600 z-30">
-{leftSidebarOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
-</button>
+    if (project.background) {
+      const bg = await new Promise(r => { const i = new Image(); i.onload = () => r(i); i.src = project.background.src; });
+      ctx.drawImage(bg, 0, 0, offCanvas.width, offCanvas.height);
+    } else {
+      ctx.fillStyle = '#111';
+      ctx.fillRect(0, 0, offCanvas.width, offCanvas.height);
+    }
 
-<div className={`${leftSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'} h-full flex flex-col overflow-hidden`}>
-<div className="p-4 border-b border-slate-800 bg-[#1c2128] flex justify-between items-center text-xs font-black uppercase tracking-widest text-blue-400">
-<span className="flex items-center gap-2"><Layers size={14}/> Designer Touch</span>
-<div className="flex gap-2">
-<button onClick={saveProject} className="p-1.5 hover:bg-slate-700 rounded text-slate-400"><Download size={14}/></button>
-<label className="p-1.5 hover:bg-slate-700 rounded text-slate-400 cursor-pointer">
-<FolderOpen size={14}/><input type="file" className="hidden" accept=".json" onChange={loadProject} />
-</label>
-</div>
-</div>
+    const sorted = [...project.elements].sort((a, b) => a.zIndex - b.zIndex);
+    for (const el of sorted) {
+      ctx.save();
+      ctx.translate(el.x, el.y);
+      ctx.rotate((el.rotation * Math.PI) / 180);
+      ctx.scale(el.scale, el.scale);
 
-<div className="flex-1 overflow-y-auto p-4 space-y-6 custom-scrollbar">
-<section className="space-y-3">
-<label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Sfondo / Maschera</label>
-{!maskData ? (
-<label className="flex flex-col items-center justify-center w-full h-20 border-2 border-dashed border-slate-700 rounded-lg hover:border-blue-500 hover:bg-blue-500/5 cursor-pointer transition-all">
-<Upload size={16} className="text-slate-500 mb-1" />
-<span className="text-[9px] text-slate-500 font-bold uppercase tracking-tighter">Carica Maschera</span>
-<input type="file" className="hidden" accept="image/*" onChange={async (e) => {
-const file = e.target.files[0];
-if (file) setMaskData(await fileToBase64(file));
-}} />
-</label>
-) : (
-<div className="relative group rounded-lg overflow-hidden border border-slate-700 aspect-video">
-<img src={maskData} className="w-full h-full object-cover" />
-<button onClick={() => setMaskData(null)} className="absolute top-2 right-2 p-1 bg-red-600 rounded opacity-0 group-hover:opacity-100 transition-opacity"><X size={12}/></button>
-</div>
-)}
-</section>
+      if (el.type === 'text') {
+        ctx.font = `${el.fontWeight} ${el.fontSize}px ${el.fontFamily}`;
+        ctx.fillStyle = el.color;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        if (el.strokeWidth > 0) {
+          ctx.strokeStyle = el.strokeColor;
+          ctx.lineWidth = el.strokeWidth;
+          ctx.strokeText(el.content, 0, 0);
+        }
+        ctx.fillText(el.content, 0, 0);
+      } else {
+        const img = await new Promise(r => { const i = new Image(); i.onload = () => r(i); i.src = el.src; });
+        ctx.drawImage(img, -img.width / 2, -img.height / 2, img.width, img.height);
+      }
+      ctx.restore();
+    }
+    const link = document.createElement('a');
+    link.download = `${project.name}.png`;
+    link.href = offCanvas.toDataURL('image/png');
+    link.click();
+  };
 
-<section className="space-y-3">
-<div className="flex justify-between items-center">
-<label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Font Library</label>
-<label className="cursor-pointer text-blue-400 hover:text-blue-300">
-<Plus size={16} />
-<input type="file" className="hidden" multiple accept=".ttf,.otf,.woff,.woff2" onChange={handleFontUpload} />
-</label>
-</div>
-<div className="space-y-1">
-{customFonts.map((font, i) => (
-<div key={i} className="flex items-center justify-between bg-[#0d1117] border border-slate-800 rounded px-2 py-1.5 text-[10px]">
-<span className="truncate text-slate-300" style={{ fontFamily: font.name }}>{font.name}</span>
-<button onClick={() => setCustomFonts(prev => prev.filter((_, idx) => idx !== i))} className="text-slate-600 hover:text-red-400"><X size={10}/></button>
-</div>
-))}
-</div>
-</section>
+  const exportSVG = async () => {
+    const sorted = [...project.elements].sort((a, b) => a.zIndex - b.zIndex);
+    let svgContent = `<svg width="${project.canvasWidth}" height="${project.canvasHeight}" viewBox="0 0 ${project.canvasWidth} ${project.canvasHeight}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">`;
+    
+    if (project.background) {
+      svgContent += `<image href="${project.background.src}" width="100%" height="100%" preserveAspectRatio="xMidYMid slice" />`;
+    } else {
+      svgContent += `<rect width="100%" height="100%" fill="#111" />`;
+    }
 
-<section className="space-y-3">
-<div className="flex justify-between items-center">
-<label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Asset Library</label>
-<label className="cursor-pointer text-blue-400 hover:text-blue-300">
-<Plus size={16} /><input type="file" className="hidden" multiple accept=".svg,.png,.jpg" onChange={async (e) => {
-const files = Array.from(e.target.files);
-for (const file of files) {
-const content = file.type === 'image/svg+xml' ? await file.text() : await fileToBase64(file);
-setAssetLibrary(prev => [...prev, { id: crypto.randomUUID(), type: file.type === 'image/svg+xml' ? 'svg' : 'raster', content, name: file.name }]);
-}
-}} />
-</label>
-</div>
-<div className="grid grid-cols-4 gap-2">
-{assetLibrary.map(asset => (
-<div key={asset.id} className="relative group aspect-square bg-[#0d1117] border border-slate-800 rounded p-1 hover:border-blue-500 cursor-pointer flex items-center justify-center overflow-hidden"
-onClick={() => {
-const meta = asset.type === 'svg' ? getSvgMetadata(asset.content) : { width: 150, height: 150, viewBox: null };
-const newEl = {
-id: crypto.randomUUID(), type: asset.type, content: asset.content, 
-innerContent: asset.type === 'svg' ? meta.content : null, 
-viewBox: meta.viewBox, x: 100, y: 100, width: meta.width, height: meta.height, 
-// Impostiamo 'original' per non sovrascrivere i colori nativi dell'SVG
-color: asset.type === 'svg' ? 'original' : '#ffffff', 
-strokeColor: asset.type === 'svg' ? 'original' : '#000000', 
-strokeWidth: 0, name: asset.name, originalRatio: meta.width / meta.height
-};
-setElements(prev => [...prev, newEl]);
-setSelectedId(newEl.id);
-}}>
-{asset.type === 'svg' ? (
-<div className="w-full h-full pointer-events-none svg-preview-container" dangerouslySetInnerHTML={{ __html: sanitizeSvgForPreview(asset.content) }} />
-) : ( <img src={asset.content} className="max-w-full max-h-full object-contain pointer-events-none" /> )}
-<button onClick={(e) => { e.stopPropagation(); setAssetLibrary(prev => prev.filter(a => a.id !== asset.id)); }} className="absolute top-0 right-0 p-1 bg-red-600 text-white rounded-bl opacity-0 group-hover:opacity-100 z-10"><Trash2 size={10}/></button>
-</div>
-))}
-</div>
-</section>
-</div>
-</div>
-</aside>
-)}
+    for (const el of sorted) {
+      const transform = `translate(${el.x}, ${el.y}) rotate(${el.rotation})`;
+      
+      if (el.type === 'text') {
+        const scaledFontSize = el.fontSize * el.scale;
+        svgContent += `<text transform="${transform}" font-family="${el.fontFamily}" font-size="${scaledFontSize}" fill="${el.color}" font-weight="${el.fontWeight}" text-anchor="middle" dominant-baseline="central" stroke="${el.strokeColor}" stroke-width="${el.strokeWidth}">${el.content}</text>`;
+      } else {
+        const scaledW = (el.width || 100) * el.scale;
+        const scaledH = (el.height || 100) * el.scale;
+        svgContent += `<image href="${el.src}" transform="${transform}" x="${-scaledW/2}" y="${-scaledH/2}" width="${scaledW}" height="${scaledH}" />`;
+      }
+    }
 
-<main className="flex-1 flex flex-col relative bg-[#010409]">
-{!isFullscreen && (
-<header className="h-14 bg-[#161b22] border-b border-slate-800 flex items-center justify-between px-6 z-30">
-<button onClick={() => {
-const newText = { id: crypto.randomUUID(), type: 'text', x: 100, y: 100, content: 'TESTO', fontSize: 40, color: '#ffffff', strokeColor: '#000000', strokeWidth: 0, fontFamily: 'sans-serif' };
-setElements([...elements, newText]);
-setSelectedId(newText.id);
-}} className="px-3 py-1.5 bg-blue-600 rounded text-xs font-bold hover:bg-blue-500 shadow-lg flex items-center gap-2 uppercase tracking-tighter">
-<Plus size={14}/> Testo
-</button>
-<div className="flex items-center gap-3">
-<button onClick={() => setIsExportOpen(!isExportOpen)} className="flex items-center gap-2 px-4 py-1.5 bg-[#21262d] border border-slate-700 rounded text-xs font-bold hover:bg-[#30363d]">ESPORTA <ChevronDown size={14} /></button>
-{isExportOpen && (
-<div className="absolute top-14 right-20 mt-2 w-32 bg-[#161b22] border border-slate-700 rounded-lg shadow-2xl py-1 z-50">
-<button onClick={() => exportAs('png')} className="w-full text-left px-4 py-2 text-xs hover:bg-blue-600">PNG</button>
-<button onClick={() => exportAs('svg')} className="w-full text-left px-4 py-2 text-xs hover:bg-blue-600 border-t border-slate-800">SVG</button>
-</div>
-)}
-<button onClick={() => setIsFullscreen(true)} className="p-2 text-slate-400 hover:text-white"><Maximize2 size={18}/></button>
-</div>
-</header>
-)}
+    svgContent += `</svg>`;
+    const blob = new Blob([svgContent], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.download = `${project.name}.svg`;
+    link.href = url;
+    link.click();
+  };
 
-<div className="flex-1 flex items-center justify-center p-8 overflow-hidden touch-none" onMouseMove={handleDrag} onMouseUp={stopDrag} onMouseDown={() => setSelectedId(null)}>
-<svg ref={svgRef} viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`} className="bg-[#0d1117] shadow-2xl border border-slate-800" style={{ width: '100%', height: 'auto', maxWidth: viewBox.w }}>
-{maskData && <image href={maskData} x="0" y="0" width={viewBox.w} height={viewBox.h} opacity={maskOpacity} preserveAspectRatio="xMidYMid slice" />}
-{elements.map((el) => (
-<g key={el.id} onMouseDown={(e) => startDrag(e, el.id)} className="cursor-move">
-{el.type === 'text' ? (
-<text x={el.x} y={el.y} fontSize={el.fontSize} fill={el.color} stroke={el.strokeColor} strokeWidth={el.strokeWidth} fontFamily={el.fontFamily} textAnchor="middle" dominantBaseline="middle">{el.content}</text>
-) : el.type === 'svg' ? (
-<svg x={el.x} y={el.y} width={el.width} height={el.height} viewBox={el.viewBox} preserveAspectRatio="xMidYMid meet" overflow="visible">
-<g 
-dangerouslySetInnerHTML={{ __html: el.innerContent }} 
-style={{ 
-fill: el.color === 'original' ? undefined : el.color, 
-stroke: el.strokeColor === 'original' ? undefined : el.strokeColor, 
-strokeWidth: el.strokeWidth 
-}} 
-/>
-</svg>
-) : ( <image href={el.content} x={el.x} y={el.y} width={el.width} height={el.height} /> )}
-{selectedId === el.id && !isFullscreen && (
-<rect className="selection-rect pointer-events-none" x={el.type === 'text' ? el.x - (el.fontSize * 1.5) : el.x} y={el.type === 'text' ? el.y - (el.fontSize / 1.5) : el.y} width={el.type === 'text' ? (el.fontSize * 3) : el.width} height={el.type === 'text' ? el.fontSize * 1.3 : el.height} fill="none" stroke="#3b82f6" strokeWidth="1" strokeDasharray="3" />
-)}
-</g>
-))}
-</svg>
-</div>
-</main>
+  const selectedElement = project.elements.find(el => el.id === selectedId);
 
-{!isFullscreen && (
-<aside className={`${rightSidebarOpen ? 'w-[320px]' : 'w-0'} bg-[#161b22] border-l border-slate-800 flex flex-col z-20 transition-all duration-300 relative`}>
-<button onClick={() => setRightSidebarOpen(!rightSidebarOpen)} className="absolute top-1/2 -left-4 -translate-y-1/2 w-8 h-12 bg-[#161b22] border border-slate-800 border-r-0 rounded-l-lg flex items-center justify-center hover:bg-blue-600 z-30">
-{rightSidebarOpen ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
-</button>
+  return (
+    <div className="flex h-screen w-full bg-[#0f0f0f] text-gray-200 overflow-hidden font-sans select-none">
+      
+      {/* PANNELLO SINISTRO */}
+      <aside className={`transition-all duration-300 bg-[#1a1a1a] border-r border-gray-800 flex flex-col overflow-hidden flex-shrink-0 ${leftPanelOpen ? 'w-80 opacity-100' : 'w-0 opacity-0 pointer-events-none'}`}>
+        <div className="p-4 flex flex-col h-full overflow-y-auto w-80">
+          <h2 className="text-xl font-bold mb-6 flex items-center gap-2"><Layers className="w-5 h-5 text-blue-400" /> Assets</h2>
+          
+          <section className="mb-6">
+            <h3 className="text-sm font-semibold text-gray-400 uppercase mb-3">Sfondo</h3>
+            <button onClick={() => fileInputRef.current.click()} className="w-full aspect-video border-2 border-dashed border-gray-700 rounded-lg flex flex-col items-center justify-center hover:border-blue-500 transition-colors bg-black/20 overflow-hidden">
+              {project.background ? <img src={project.background.src} className="h-full w-full object-contain" alt="bg" /> : <ImageIcon className="w-8 h-8 text-gray-600" />}
+            </button>
+            <input type="file" ref={fileInputRef} hidden accept="image/*" onChange={handleBackgroundUpload} />
+          </section>
 
-<div className={`${rightSidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'} h-full flex flex-col overflow-hidden`}>
-{selectedElement ? (
-<div className="p-6 space-y-6 overflow-y-auto custom-scrollbar">
-<h2 className="text-[10px] font-black uppercase text-slate-500 tracking-widest border-b border-slate-800 pb-2">Proprietà</h2>
-<div className="space-y-2">
-<label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Ordinamento Livelli</label>
-<div className="grid grid-cols-4 gap-1">
-<button onClick={() => moveLayer(selectedId, 'top')} className="flex flex-col items-center justify-center p-2 bg-[#0d1117] border border-slate-700 rounded hover:bg-blue-600 transition-colors"><ArrowUp size={14} /><span className="text-[7px] mt-1 uppercase">Top</span></button>
-<button onClick={() => moveLayer(selectedId, 'up')} className="flex flex-col items-center justify-center p-2 bg-[#0d1117] border border-slate-700 rounded hover:bg-blue-600 transition-colors"><ChevronUp size={14} /><span className="text-[7px] mt-1 uppercase">Sopra</span></button>
-<button onClick={() => moveLayer(selectedId, 'down')} className="flex flex-col items-center justify-center p-2 bg-[#0d1117] border border-slate-700 rounded hover:bg-blue-600 transition-colors"><ChevronDown size={14} /><span className="text-[7px] mt-1 uppercase">Sotto</span></button>
-<button onClick={() => moveLayer(selectedId, 'bottom')} className="flex flex-col items-center justify-center p-2 bg-[#0d1117] border border-slate-700 rounded hover:bg-blue-600 transition-colors"><ArrowDown size={14} /><span className="text-[7px] mt-1 uppercase">Base</span></button>
-</div>
-</div>
+          <section className="mb-6">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-sm font-semibold text-gray-400 uppercase">Icone</h3>
+              <button onClick={() => iconInputRef.current.click()} className="p-1 hover:bg-gray-700 rounded"><Plus className="w-4 h-4" /></button>
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {project.assets.filter(a => a.type === 'icon').map(asset => (
+                <div key={asset.id} className="relative aspect-square bg-black/40 rounded border border-gray-700 p-1 hover:border-blue-500 cursor-pointer" onClick={() => addIcon(asset)}>
+                  <img src={asset.src} className="w-full h-full object-contain" alt="icon" />
+                </div>
+              ))}
+            </div>
+            <input type="file" ref={iconInputRef} hidden multiple accept="image/*" onChange={handleIconUpload} />
+          </section>
 
-<div className="space-y-2">
-<label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Posizione (X, Y)</label>
-<div className="grid grid-cols-2 gap-2">
-<div className="flex items-center bg-[#0d1117] border border-slate-700 rounded px-2">
-<span className="text-[9px] text-slate-500 font-bold mr-2">X</span>
-<input type="number" value={selectedElement.x} onChange={e => updateElement(selectedId, {x: parseInt(e.target.value) || 0})} className="w-full bg-transparent py-1.5 text-xs text-blue-400 outline-none"/>
-</div>
-<div className="flex items-center bg-[#0d1117] border border-slate-700 rounded px-2">
-<span className="text-[9px] text-slate-500 font-bold mr-2">Y</span>
-<input type="number" value={selectedElement.y} onChange={e => updateElement(selectedId, {y: parseInt(e.target.value) || 0})} className="w-full bg-transparent py-1.5 text-xs text-blue-400 outline-none"/>
-</div>
-</div>
-</div>
+          <section className="mb-6">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-sm font-semibold text-gray-400 uppercase">Font</h3>
+              <button onClick={() => fontInputRef.current.click()} className="p-1 hover:bg-gray-700 rounded"><Plus className="w-4 h-4" /></button>
+            </div>
+            <div className="space-y-2">
+              {project.assets.filter(a => a.type === 'font').map(asset => (
+                <div key={asset.id} className="text-xs bg-black/20 p-2 rounded border border-gray-800" style={{ fontFamily: asset.family }}>{asset.name}</div>
+              ))}
+            </div>
+            <input type="file" ref={fontInputRef} hidden accept=".ttf,.woff,.woff2" onChange={handleFontUpload} />
+          </section>
 
-{selectedElement.type === 'text' ? (
-<div className="space-y-4">
-<div className="space-y-2">
-<label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Font Family</label>
-<select value={selectedElement.fontFamily} onChange={e => updateElement(selectedId, {fontFamily: e.target.value})} className="w-full bg-[#0d1117] border border-slate-700 rounded p-2 text-xs text-blue-400 outline-none">
-<option value="sans-serif">Sans Serif</option>
-{customFonts.map((f, idx) => <option key={idx} value={f.name}>{f.name}</option>)}
-</select>
-</div>
-<div className="space-y-2">
-<div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase"><label>Dimensione</label><span>{selectedElement.fontSize}px</span></div>
-<input type="range" min="8" max="500" step="1" value={selectedElement.fontSize} onChange={e => updateElement(selectedId, {fontSize: parseInt(e.target.value)})} className="w-full h-1 bg-slate-800 rounded-lg appearance-none accent-blue-500"/>
-</div>
-<textarea value={selectedElement.content} onChange={e => updateElement(selectedId, {content: e.target.value})} className="w-full bg-[#0d1117] border border-slate-700 rounded p-2 text-xs outline-none min-h-[60px]" />
-</div>
-) : (
-<div className="space-y-4">
-<div className="space-y-2">
-<div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase"><label>Scala (W)</label><span className="text-blue-400 font-mono">{selectedElement.width}px</span></div>
-<input type="range" min="5" max="1500" step="1" value={selectedElement.width} onChange={e => handleProportionalScale(selectedId, parseInt(e.target.value))} className="w-full h-1 bg-slate-800 rounded-lg appearance-none accent-blue-500" />
-</div>
-</div>
-)}
+          <div className="mt-auto space-y-3 pt-4 border-t border-gray-800">
+            <button onClick={addText} className="w-full py-2 bg-blue-600 hover:bg-blue-500 rounded-lg flex items-center justify-center gap-2 font-medium"><Type className="w-4 h-4" /> Testo</button>
+            
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={exportProjectJSON} className="py-2 bg-gray-800 hover:bg-gray-700 rounded flex items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-tighter">
+                <FileJson className="w-3 h-3" /> Esporta JSON
+              </button>
+              <button onClick={() => jsonInputRef.current.click()} className="py-2 bg-gray-800 hover:bg-gray-700 rounded flex items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-tighter">
+                <Upload className="w-3 h-3" /> Importa JSON
+              </button>
+              <input type="file" ref={jsonInputRef} hidden accept=".json" onChange={importProjectJSON} />
+            </div>
+          </div>
+        </div>
+      </aside>
 
-{(selectedElement.type === 'text' || selectedElement.type === 'svg') && (
-<div className="space-y-4 pt-4 border-t border-slate-800">
-<div className="space-y-2">
-<div className="flex justify-between items-center">
-<label className="text-[10px] font-bold text-slate-500 uppercase">Colore Riempimento</label>
-{selectedElement.type === 'svg' && (
-<button onClick={() => updateElement(selectedId, {color: 'original'})} className={`text-[8px] px-1.5 py-0.5 rounded border ${selectedElement.color === 'original' ? 'bg-blue-600 border-blue-500' : 'border-slate-700 text-slate-500'}`}>ORIGINALE</button>
-)}
-</div>
-<div className="flex gap-2">
-<input type="color" value={selectedElement.color === 'original' ? '#000000' : selectedElement.color} onChange={e => updateElement(selectedId, {color: e.target.value})} className="h-10 w-12 bg-[#0d1117] border border-slate-700 rounded cursor-pointer"/>
-<input type="text" value={selectedElement.color} onChange={e => updateElement(selectedId, {color: e.target.value})} className="flex-1 bg-[#0d1117] border border-slate-700 rounded px-2 text-xs font-mono text-blue-400 uppercase outline-none"/>
-</div>
-</div>
-<div className="space-y-2">
-<div className="flex justify-between items-center">
-<label className="text-[10px] font-bold text-slate-500 uppercase">Colore Bordo</label>
-{selectedElement.type === 'svg' && (
-<button onClick={() => updateElement(selectedId, {strokeColor: 'original'})} className={`text-[8px] px-1.5 py-0.5 rounded border ${selectedElement.strokeColor === 'original' ? 'bg-blue-600 border-blue-500' : 'border-slate-700 text-slate-500'}`}>ORIGINALE</button>
-)}
-</div>
-<div className="flex gap-2">
-<input type="color" value={selectedElement.strokeColor === 'original' ? '#000000' : selectedElement.strokeColor} onChange={e => updateElement(selectedId, {strokeColor: e.target.value})} className="h-10 w-12 bg-[#0d1117] border border-slate-700 rounded cursor-pointer"/>
-<input type="text" value={selectedElement.strokeColor} onChange={e => updateElement(selectedId, {strokeColor: e.target.value})} className="flex-1 bg-[#0d1117] border border-slate-700 rounded px-2 text-xs font-mono text-blue-400 uppercase outline-none"/>
-</div>
-</div>
-<div className="space-y-2">
-<div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase"><label>Spessore Bordo</label><span>{selectedElement.strokeWidth}px</span></div>
-<input type="range" min="0" max="20" step="0.5" value={selectedElement.strokeWidth} onChange={e => updateElement(selectedId, {strokeWidth: parseFloat(e.target.value)})} className="w-full h-1 bg-slate-800 rounded-lg appearance-none accent-blue-500"/>
-</div>
-</div>
-)}
-<button onClick={() => { setElements(elements.filter(e => e.id !== selectedId)); setSelectedId(null); }} className="w-full py-2 bg-red-900/20 text-red-500 rounded text-xs font-bold hover:bg-red-900/40 transition-colors flex items-center justify-center gap-2 uppercase tracking-widest"><Trash2 size={14}/> Elimina Elemento</button>
-</div>
-) : (
-<div className="p-6 space-y-6">
-<h2 className="text-[10px] font-black uppercase text-slate-500 tracking-widest border-b border-slate-800 pb-2">Canvas</h2>
-<div className="grid grid-cols-2 gap-4">
-<div className="space-y-1"><label className="text-[9px] text-slate-500 font-bold uppercase">W</label><input type="number" value={viewBox.w} onChange={e => setViewBox({...viewBox, w: parseInt(e.target.value) || 800})} className="w-full bg-[#0d1117] border border-slate-700 rounded p-2 text-xs text-blue-400 outline-none"/></div>
-<div className="space-y-1"><label className="text-[9px] text-slate-500 font-bold uppercase">H</label><input type="number" value={viewBox.h} onChange={e => setViewBox({...viewBox, h: parseInt(e.target.value) || 450})} className="w-full bg-[#0d1117] border border-slate-700 rounded p-2 text-xs text-blue-400 outline-none"/></div>
-</div>
-<div className="space-y-2 pt-4 border-t border-slate-800">
-<div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase"><label>Opacità Maschera</label><span>{Math.round(maskOpacity * 100)}%</span></div>
-<input type="range" min="0" max="1" step="0.01" value={maskOpacity} onChange={e => setMaskOpacity(parseFloat(e.target.value))} className="w-full h-1 bg-slate-800 rounded-lg appearance-none accent-blue-500" />
-</div>
-</div>
-)}
-</div>
-</aside>
-)}
+      {/* Toggle Pannelli */}
+      <div className="flex flex-col justify-center gap-4 z-50">
+        <button onClick={() => setLeftPanelOpen(!leftPanelOpen)} className="h-12 w-6 bg-[#1a1a1a] border border-gray-800 border-l-0 rounded-r-lg hover:bg-gray-700">
+          {leftPanelOpen ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        </button>
+      </div>
 
-<style>{`
-.custom-scrollbar::-webkit-scrollbar { width: 4px; }
-.custom-scrollbar::-webkit-scrollbar-thumb { background: #30363d; border-radius: 10px; }
-input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; background: #3b82f6; border-radius: 50%; cursor: pointer; }
-.svg-preview-container svg { width: 100% !important; height: 100% !important; display: block; }
-`}</style>
-</div>
-);
+      {/* AREA CENTRALE CANVAS */}
+      <main className="flex-1 relative overflow-hidden bg-black/60 flex items-center justify-center p-4" onMouseMove={handleMouseMove} onMouseUp={() => setIsDragging(false)}>
+        <div className="absolute top-6 right-6 flex gap-2 z-50">
+            <div className="bg-[#1a1a1a] p-1 rounded-lg border border-gray-800 flex shadow-xl">
+                <button onClick={exportPNG} className="px-4 py-2 hover:bg-gray-800 rounded flex items-center gap-2 text-xs font-bold text-blue-400">
+                    <Save className="w-4 h-4"/> PNG
+                </button>
+                <button onClick={exportSVG} className="px-4 py-2 hover:bg-gray-800 rounded flex items-center gap-2 text-xs font-bold text-purple-400">
+                    <DownloadCloud className="w-4 h-4"/> SVG
+                </button>
+            </div>
+        </div>
+
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-[#1a1a1a] p-2 rounded-full shadow-2xl flex items-center gap-4 px-4 border border-gray-800 z-50">
+          <button onClick={() => setZoom(z => Math.max(0.05, z - 0.05))} className="p-1 hover:bg-gray-700 rounded-full"><Minimize className="w-4 h-4"/></button>
+          <span className="text-xs font-mono w-12 text-center">{Math.round(zoom * 100)}%</span>
+          <button onClick={() => setZoom(z => Math.min(4, z + 0.05))} className="p-1 hover:bg-gray-700 rounded-full"><Maximize className="w-4 h-4"/></button>
+        </div>
+
+        <div className="w-full h-full overflow-auto flex items-center justify-center custom-scrollbar">
+          <div 
+            ref={canvasRef}
+            onMouseDown={(e) => e.target === canvasRef.current && setSelectedId(null)}
+            className="relative shadow-2xl flex-shrink-0"
+            style={{
+              width: project.canvasWidth,
+              height: project.canvasHeight,
+              transform: `scale(${zoom})`,
+              transformOrigin: 'center center',
+              backgroundColor: '#111',
+              backgroundImage: project.background ? `url(${project.background.src})` : 'none',
+              backgroundSize: '100% 100%',
+              backgroundRepeat: 'no-repeat'
+            }}
+          >
+            {project.elements.sort((a,b) => a.zIndex - b.zIndex).map(el => (
+              <div
+                key={el.id}
+                onMouseDown={(e) => handleElementStartDrag(e, el)}
+                className={`absolute flex items-center justify-center pointer-events-auto cursor-move ${selectedId === el.id ? 'ring-2 ring-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.5)]' : ''}`}
+                style={{
+                  left: el.x,
+                  top: el.y,
+                  transform: `translate(-50%, -50%) rotate(${el.rotation}deg) scale(${el.scale})`,
+                  zIndex: el.zIndex,
+                  width: el.type === 'icon' ? el.width : 'auto',
+                  height: el.type === 'icon' ? el.height : 'auto',
+                }}
+              >
+                {el.type === 'text' ? (
+                  <div style={{
+                    fontFamily: el.fontFamily,
+                    fontSize: el.fontSize,
+                    color: el.color,
+                    fontWeight: el.fontWeight,
+                    whiteSpace: 'nowrap',
+                    WebkitTextStroke: `${el.strokeWidth}px ${el.strokeColor}`,
+                    textAlign: 'center'
+                  }}>{el.content}</div>
+                ) : (
+                  <img src={el.src} draggable={false} className="max-w-none block" style={{ width: '100%', height: '100%' }} />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </main>
+
+      <div className="flex flex-col justify-center gap-4 z-50">
+        <button onClick={() => setRightPanelOpen(!rightPanelOpen)} className="h-12 w-6 bg-[#1a1a1a] border border-gray-800 border-r-0 rounded-l-lg hover:bg-gray-700">
+          {rightPanelOpen ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+        </button>
+      </div>
+
+      {/* PANNELLO DESTRO */}
+      <aside className={`transition-all duration-300 bg-[#1a1a1a] border-l border-gray-800 flex flex-col overflow-hidden flex-shrink-0 ${rightPanelOpen ? 'w-80 opacity-100' : 'w-0 opacity-0 pointer-events-none'}`}>
+        <div className="p-4 overflow-y-auto w-80">
+          <h2 className="text-xl font-bold mb-6 flex items-center gap-2"><Move className="w-5 h-5 text-purple-400" /> Proprietà</h2>
+          {selectedElement ? (
+            <div className="space-y-6">
+              <section>
+                <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div><label className="text-[10px] text-gray-500 uppercase">Posizione X</label><input type="number" value={selectedElement.x} onChange={(e) => updateElement(selectedId, { x: parseInt(e.target.value) || 0 })} className="w-full bg-black/40 border border-gray-700 rounded px-2 py-1 text-sm" /></div>
+                  <div><label className="text-[10px] text-gray-500 uppercase">Posizione Y</label><input type="number" value={selectedElement.y} onChange={(e) => updateElement(selectedId, { y: parseInt(e.target.value) || 0 })} className="w-full bg-black/40 border border-gray-700 rounded px-2 py-1 text-sm" /></div>
+                </div>
+                <div className="mb-4">
+                   <div className="flex justify-between items-center text-[10px] text-gray-500 uppercase mb-1">
+                     <span>Scala</span>
+                     <div className="flex items-center gap-1 bg-black/40 px-1 rounded border border-gray-700">
+                        <input 
+                          type="number" 
+                          step="0.01"
+                          value={Math.round(selectedElement.scale * 100) / 100} 
+                          onChange={(e) => updateElement(selectedId, { scale: parseFloat(e.target.value) || 0.01 })}
+                          className="w-12 bg-transparent text-right text-xs outline-none py-0.5"
+                        />
+                        <span className="text-[8px] text-gray-600">x</span>
+                     </div>
+                   </div>
+                   <input type="range" min="0.01" max="5" step="0.01" value={selectedElement.scale} onChange={(e) => updateElement(selectedId, { scale: parseFloat(e.target.value) })} className="w-full accent-blue-500" />
+                </div>
+                <div className="mb-4">
+                   <div className="flex justify-between text-[10px] text-gray-500 uppercase"><span>Rotazione</span><span>{selectedElement.rotation}°</span></div>
+                   <input type="range" min="0" max="360" value={selectedElement.rotation} onChange={(e) => updateElement(selectedId, { rotation: parseInt(e.target.value) })} className="w-full accent-purple-500" />
+                </div>
+              </section>
+
+              {/* GESTIONE LIVELLI */}
+              <section className="pt-4 border-t border-gray-800">
+                <h3 className="text-xs font-semibold text-gray-400 uppercase mb-3">Livelli</h3>
+                <div className="grid grid-cols-4 gap-2">
+                  <button onClick={() => updateZIndex(selectedId, 'front')} className="p-2 bg-gray-800 hover:bg-gray-700 rounded flex flex-col items-center gap-1" title="In Primo Piano">
+                    <ArrowUp className="w-4 h-4 text-blue-400" />
+                    <span className="text-[8px] uppercase">Top</span>
+                  </button>
+                  <button onClick={() => updateZIndex(selectedId, 'up')} className="p-2 bg-gray-800 hover:bg-gray-700 rounded flex flex-col items-center gap-1" title="Sposta Su">
+                    <ChevronUp className="w-4 h-4 text-gray-300" />
+                    <span className="text-[8px] uppercase">Su</span>
+                  </button>
+                  <button onClick={() => updateZIndex(selectedId, 'down')} className="p-2 bg-gray-800 hover:bg-gray-700 rounded flex flex-col items-center gap-1" title="Sposta Giù">
+                    <ChevronDown className="w-4 h-4 text-gray-300" />
+                    <span className="text-[8px] uppercase">Giù</span>
+                  </button>
+                  <button onClick={() => updateZIndex(selectedId, 'back')} className="p-2 bg-gray-800 hover:bg-gray-700 rounded flex flex-col items-center gap-1" title="Sullo Sfondo">
+                    <ArrowDown className="w-4 h-4 text-red-400" />
+                    <span className="text-[8px] uppercase">Bottom</span>
+                  </button>
+                </div>
+              </section>
+
+              {selectedElement.type === 'text' && (
+                <section className="space-y-4 pt-4 border-t border-gray-800">
+                  <h3 className="text-xs font-semibold text-gray-400 uppercase">Testo</h3>
+                  <textarea value={selectedElement.content} onChange={(e) => updateElement(selectedId, { content: e.target.value })} className="w-full bg-black/40 border border-gray-700 rounded p-2 text-sm h-20" />
+                  
+                  <div>
+                    <label className="text-[10px] text-gray-500 uppercase mb-1 block">Famiglia Font</label>
+                    <select 
+                      value={selectedElement.fontFamily} 
+                      onChange={(e) => updateElement(selectedId, { fontFamily: e.target.value })}
+                      className="w-full bg-black/40 border border-gray-700 rounded px-2 py-1 text-sm"
+                    >
+                      <option value="sans-serif">Sans Serif</option>
+                      <option value="serif">Serif</option>
+                      <option value="monospace">Monospace</option>
+                      {project.assets.filter(a => a.type === 'font').map(f => (
+                        <option key={f.id} value={f.family}>{f.name}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] text-gray-500 uppercase mb-1 block">Peso</label>
+                      <select 
+                        value={selectedElement.fontWeight} 
+                        onChange={(e) => updateElement(selectedId, { fontWeight: e.target.value })}
+                        className="w-full bg-black/40 border border-gray-700 rounded px-2 py-1 text-sm"
+                      >
+                        <option value="normal">Normale</option>
+                        <option value="bold">Grassetto</option>
+                        <option value="lighter">Sottile</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-gray-500 uppercase mb-1 block">Dim. Base</label>
+                      <input type="number" value={selectedElement.fontSize} onChange={(e) => updateElement(selectedId, { fontSize: parseInt(e.target.value) || 12 })} className="w-full bg-black/40 border border-gray-700 rounded px-2 py-1 text-sm" />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                        <label className="text-[10px] text-gray-500 uppercase mb-1 block">Colore Testo</label>
+                        <input type="color" value={selectedElement.color} onChange={(e) => updateElement(selectedId, { color: e.target.value })} className="w-full h-8 cursor-pointer bg-transparent border-none p-0" />
+                    </div>
+                    <div>
+                        <label className="text-[10px] text-gray-500 uppercase mb-1 block">Colore Bordo</label>
+                        <input type="color" value={selectedElement.strokeColor} onChange={(e) => updateElement(selectedId, { strokeColor: e.target.value })} className="w-full h-8 cursor-pointer bg-transparent border-none p-0" />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-[10px] text-gray-500 uppercase"><span>Spessore Bordo</span><span>{selectedElement.strokeWidth}px</span></div>
+                    <input type="range" min="0" max="20" step="0.5" value={selectedElement.strokeWidth} onChange={(e) => updateElement(selectedId, { strokeWidth: parseFloat(e.target.value) })} className="w-full accent-blue-500" />
+                  </div>
+                </section>
+              )}
+              <button onClick={() => deleteElement(selectedId)} className="w-full py-3 bg-red-900/20 text-red-500 border border-red-900/50 rounded-lg font-bold hover:bg-red-900/40 transition-colors">ELIMINA</button>
+            </div>
+          ) : <div className="text-center text-gray-600 mt-20 italic">Seleziona un elemento</div>}
+        </div>
+      </aside>
+
+      <style>{`
+        input[type="range"] { -webkit-appearance: none; height: 4px; background: #333; border-radius: 2px; }
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; background: #3b82f6; border-radius: 50%; cursor: pointer; }
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #444; }
+        input[type="number"]::-webkit-inner-spin-button, 
+        input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+      `}</style>
+    </div>
+  );
 };
 
 export default App;
-
