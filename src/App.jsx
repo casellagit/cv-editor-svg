@@ -3,22 +3,23 @@ import {
   Plus, Image as ImageIcon, Type, X, 
   ChevronLeft, ChevronRight, Layers, Trash2, Move, 
   Maximize, Minimize, DownloadCloud, FileJson, Save, Upload,
-  ArrowUp, ArrowDown, ChevronUp, ChevronDown
+  ArrowUp, ArrowDown, ChevronUp, ChevronDown, RotateCcw
 } from 'lucide-react';
 
 const DEFAULT_CANVAS_WIDTH = 1920;
 const DEFAULT_CANVAS_HEIGHT = 1080;
 
 const App = () => {
-  const [project, setProject] = useState({
+  const initialState = {
     name: "Nuovo Progetto",
     background: null,
     assets: [],
     elements: [],
     canvasWidth: DEFAULT_CANVAS_WIDTH,
     canvasHeight: DEFAULT_CANVAS_HEIGHT
-  });
+  };
 
+  const [project, setProject] = useState(initialState);
   const [selectedId, setSelectedId] = useState(null);
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
@@ -33,6 +34,12 @@ const App = () => {
   const jsonInputRef = useRef(null);
 
   const generateId = () => Math.random().toString(36).substr(2, 9);
+
+  const resetProject = () => {
+    setProject(initialState);
+    setSelectedId(null);
+    setZoom(0.4);
+  };
 
   const updateElement = (id, updates) => {
     setProject(prev => ({
@@ -310,7 +317,6 @@ const App = () => {
     const sorted = [...project.elements].sort((a, b) => a.zIndex - b.zIndex);
     let svgContent = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n<svg width="${project.canvasWidth}" height="${project.canvasHeight}" viewBox="0 0 ${project.canvasWidth} ${project.canvasHeight}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">`;
     
-    // Background
     if (project.background) {
       svgContent += `\n<image href="${project.background.src}" x="0" y="0" width="${project.canvasWidth}" height="${project.canvasHeight}" preserveAspectRatio="none" />`;
     } else {
@@ -319,7 +325,6 @@ const App = () => {
 
     for (const el of sorted) {
       if (el.type === 'text') {
-        // Fix per il testo: Usiamo dy=".35em" che è molto più compatibile di dominant-baseline per il centro verticale
         svgContent += `\n<g transform="translate(${el.x}, ${el.y}) rotate(${el.rotation}) scale(${el.scale})">`;
         svgContent += `<text x="0" y="0" dy=".35em" font-family="${el.fontFamily}" font-size="${el.fontSize}" fill="${el.color}" font-weight="${el.fontWeight}" text-anchor="middle" stroke="${el.strokeColor}" stroke-width="${el.strokeWidth}">${el.content}</text>`;
         svgContent += `</g>`;
@@ -431,6 +436,13 @@ const App = () => {
               </button>
               <input type="file" ref={jsonInputRef} hidden accept=".json" onChange={importProjectJSON} />
             </div>
+
+            <button 
+              onClick={resetProject} 
+              className="w-full py-2 border border-red-900/50 bg-red-900/10 hover:bg-red-900/30 text-red-500 rounded-lg flex items-center justify-center gap-2 text-xs font-bold uppercase transition-all"
+            >
+              <RotateCcw className="w-3.5 h-3.5" /> Reset Progetto
+            </button>
           </div>
         </div>
       </aside>
@@ -555,7 +567,6 @@ const App = () => {
                 </div>
               </section>
 
-              {/* GESTIONE LIVELLI */}
               <section className="pt-4 border-t border-gray-800">
                 <h3 className="text-xs font-semibold text-gray-400 uppercase mb-3">Livelli</h3>
                 <div className="grid grid-cols-4 gap-2">
